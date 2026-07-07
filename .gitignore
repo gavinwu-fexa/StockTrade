@@ -13,3 +13,4 @@ frontend/dist/
 
 # os / editor
 .DS_Store
+.claude/settings.local.json
