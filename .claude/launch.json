@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "/Users/gavinwu/Personal/StockTrade/backend/.venv/bin/uvicorn",
+      "runtimeArgs": ["app.main:app", "--port", "8000", "--loop", "asyncio", "--app-dir", "/Users/gavinwu/Personal/StockTrade/backend"],
+      "cwd": "/Users/gavinwu/Personal/StockTrade/backend",
+      "port": 8000
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "/opt/homebrew/bin/npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "/Users/gavinwu/Personal/StockTrade/frontend",
+      "port": 5173
+    }
+  ]
+}
