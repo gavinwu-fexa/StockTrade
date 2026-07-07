@@ -1,0 +1,15 @@
+# python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# local data: trade DB + cached market bars (personal, regenerable)
+backend/data/
+
+# node
+frontend/node_modules/
+frontend/dist/
+
+# os / editor
+.DS_Store
