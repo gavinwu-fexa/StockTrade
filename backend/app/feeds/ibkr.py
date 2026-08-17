@@ -30,6 +30,17 @@ SCAN_INTERVAL = 30.0
 MAX_SCAN_ROWS = 12
 
 
+class _HandledIbkrErrorFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        scanner_cancelled = "Error 162" in message and "scanner subscription cancelled" in message
+        fundamentals_denied = "Error 10358" in message and "Fundamentals data is not allowed" in message
+        return not (scanner_cancelled or fundamentals_denied)
+
+
+logging.getLogger("ib_insync.wrapper").addFilter(_HandledIbkrErrorFilter())
+
+
 class IbkrFeed(DataFeed):
     name = "ibkr"
 
@@ -46,6 +57,8 @@ class IbkrFeed(DataFeed):
         self._scan_task: Optional[asyncio.Task] = None
         self._quote_task: Optional[asyncio.Task] = None
         self._running = False
+        self._fundamentals_available = True
+        self.ib.errorEvent += self._on_ib_error
 
     # -- lifecycle -------------------------------------------------------------
 
@@ -58,6 +71,8 @@ class IbkrFeed(DataFeed):
 
     async def stop(self) -> None:
         self._running = False
+        with contextlib.suppress(Exception):
+            self.ib.errorEvent -= self._on_ib_error
         for task in (self._scan_task, self._quote_task):
             if task:
                 task.cancel()
@@ -69,6 +84,11 @@ class IbkrFeed(DataFeed):
                 self.ib.cancelMktData(ticker.contract)
         self._live_bars.clear()
         self._tickers.clear()
+
+    def _on_ib_error(self, _req_id, error_code, _error_string, _contract) -> None:
+        if error_code == 10358 and self._fundamentals_available:
+            self._fundamentals_available = False
+            log.info("IBKR fundamentals unavailable; float enrichment disabled")
 
     # -- scanning ----------------------------------------------------------------
 
@@ -127,14 +147,15 @@ class IbkrFeed(DataFeed):
                     stats["prev_close"] = float(daily[-1].close)
         except Exception as e:
             log.info("daily history unavailable for %s: %s", symbol, e)
-        try:
-            xml_report = await asyncio.wait_for(
-                self.ib.reqFundamentalDataAsync(contract, "ReportSnapshot"), timeout=10,
-            )
-            if xml_report:
-                stats["float"] = _parse_float_shares(xml_report)
-        except Exception:
-            pass  # fundamentals frequently unavailable on paper accounts
+        if self._fundamentals_available:
+            try:
+                xml_report = await asyncio.wait_for(
+                    self.ib.reqFundamentalDataAsync(contract, "ReportSnapshot"), timeout=10,
+                )
+                if xml_report:
+                    stats["float"] = _parse_float_shares(xml_report)
+            except Exception:
+                pass  # the error callback disables future attempts for entitlement failures
         self._daily_stats[symbol] = stats
 
     def snapshots(self) -> list[StockSnapshot]:

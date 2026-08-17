@@ -32,12 +32,18 @@ log = logging.getLogger(__name__)
 
 
 class IBKRBroker(Broker):
-    def __init__(self, config: IBKRConfig, port: Optional[int] = None):
+    def __init__(
+        self,
+        config: IBKRConfig,
+        port: Optional[int] = None,
+        allow_live_orders: bool = False,
+    ):
         super().__init__()
         self.config = config
-        self.port = port                 # None → probe the paper ports
+        self.port = port
+        self.allow_live_orders = allow_live_orders
         self.connected_port: Optional[int] = None
-        self.read_only = False           # forced True on live ports
+        self.read_only = False
         self.ib = None
         self._orders: dict[str, Order] = {}
         self._last_prices: dict[str, float] = {}
@@ -65,7 +71,9 @@ class IBKRBroker(Broker):
         # loop we're actually running on (uvicorn may use uvloop otherwise).
         asyncio.set_event_loop(asyncio.get_running_loop())
 
-        candidates = [self.port] if self.port else list(self.config.paper_ports)
+        candidates = [self.port] if self.port else list(
+            self.config.live_ports if self.allow_live_orders else self.config.paper_ports
+        )
         for port in candidates:
             if await self._try_connect(port, timeout=6):
                 break
@@ -77,9 +85,11 @@ class IBKRBroker(Broker):
                 "(Configure → API → Settings → 'Enable ActiveX and Socket Clients')?"
             )
 
-        # Hard safeguard: a live-account connection is data-only. Orders are
-        # refused here AND in the engine — there is no override switch.
-        self.read_only = self.connected_port in self.config.live_ports
+        is_live_port = self.connected_port in self.config.live_ports
+        if self.allow_live_orders and not is_live_port:
+            await self.disconnect()
+            raise ConnectionError("Live trading requires an IBKR live port (7496/4001).")
+        self.read_only = is_live_port and not self.allow_live_orders
         self.ib.execDetailsEvent += self._on_exec_details
         # Snapshot the account summary once; afterwards account() reads
         # ib_insync's auto-updating accountValues() cache. (IB.accountSummary()
@@ -91,7 +101,8 @@ class IBKRBroker(Broker):
         log.info(
             "connected to IBKR on port %s%s",
             self.connected_port,
-            " (LIVE account — READ-ONLY, orders disabled)" if self.read_only else "",
+            " (LIVE account — READ-ONLY, orders disabled)" if self.read_only
+            else " (LIVE ORDERS ENABLED)" if is_live_port else "",
         )
 
     async def disconnect(self) -> None:

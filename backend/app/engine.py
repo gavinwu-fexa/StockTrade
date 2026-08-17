@@ -5,14 +5,14 @@ Wires together a DataFeed (SIM synthetic market or IBKR live) and a Broker
 every order through the RiskManager, persists trades/fills to SQLite, and
 broadcasts state to UI clients over the WebSocket hub.
 
-Mode switching (SIM <-> PAPER) swaps the feed+broker pair at runtime; the
-strategy, risk rules, and UI stay identical. LIVE mode deliberately has no
-runtime path — it requires editing config.py.
+Mode switching swaps the feed+broker pair at runtime; the strategy, risk rules,
+and UI stay identical. LIVE mode requires server opt-in and a per-startup code.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 import time
 from typing import Optional
 
@@ -102,6 +102,11 @@ class Engine:
         self._tasks: list[asyncio.Task] = []
         self._running = False
         self._mode_lock = asyncio.Lock()
+        self._live_unlock_code = secrets.token_urlsafe(9)
+        self._live_session_token: Optional[str] = None
+
+        if settings.ibkr.live_trading_enabled:
+            log.warning("LIVE TRADING UNLOCK CODE: %s", self._live_unlock_code)
 
         self._wire_broker()
         self._wire_feed()
@@ -149,23 +154,35 @@ class Engine:
 
     # -- mode switching -------------------------------------------------------------
 
-    async def switch_mode(self, target: Mode, port: Optional[int] = None) -> None:
+    async def switch_mode(
+        self,
+        target: Mode,
+        port: Optional[int] = None,
+        live_orders: bool = False,
+    ) -> None:
         """Swap feed+broker pairs. Raises ConnectionError if IBKR is unreachable.
 
-        An explicit live port (e.g. Gateway 4001) is allowed for DATA ONLY:
-        the broker comes up read-only and every order path refuses.
+        LIVE mode probes the configured live ports and requires the caller to
+        have verified the per-startup unlock code.
         """
         async with self._mode_lock:
             if target == self.mode and not port:
                 return
             if target == Mode.LIVE:
-                raise ValueError("LIVE mode must be enabled in config.py, deliberately.")
+                if not settings.ibkr.live_trading_enabled:
+                    raise PermissionError("Live trading is disabled on the server.")
+                if not live_orders:
+                    raise PermissionError("Live trading requires a verified unlock code.")
 
-            if target == Mode.PAPER:
+            if target in (Mode.PAPER, Mode.LIVE):
                 from .brokers.ibkr import IBKRBroker
                 from .feeds.ibkr import IbkrFeed
 
-                broker = IBKRBroker(settings.ibkr, port=port)
+                broker = IBKRBroker(
+                    settings.ibkr,
+                    port=port,
+                    allow_live_orders=target == Mode.LIVE,
+                )
                 await broker.connect()          # raises ConnectionError w/ guidance
                 feed = IbkrFeed(broker.ib)
             else:
@@ -185,6 +202,9 @@ class Engine:
             self.signal_log = []
             self.round_trips = RoundTrips()
             self.ibkr_error = None
+            self.auto_trade = False
+            if target != Mode.LIVE:
+                self.clear_live_session()
             self.risk = RiskManager(settings.risk, settings.starting_equity)
             self._wire_broker()
             self._wire_feed()
@@ -204,12 +224,37 @@ class Engine:
                 "mode": self.mode.value,
                 "read_only": self.read_only,
                 "port": getattr(self.broker, "connected_port", None),
+                "live_orders_enabled": self.live_orders_enabled,
+                "auto_trade": self.auto_trade,
             })
             await manager.broadcast("selected", {"symbol": self.selected_symbol})
 
     @property
     def read_only(self) -> bool:
         return bool(getattr(self.broker, "read_only", False))
+
+    @property
+    def live_orders_enabled(self) -> bool:
+        return self.mode == Mode.LIVE and not self.read_only
+
+    def live_unlock_matches(self, code: str) -> bool:
+        return settings.ibkr.live_trading_enabled and secrets.compare_digest(
+            code.strip(), self._live_unlock_code
+        )
+
+    def start_live_session(self) -> str:
+        self._live_session_token = secrets.token_urlsafe(32)
+        return self._live_session_token
+
+    def verify_live_session(self, token: Optional[str]) -> bool:
+        return bool(
+            token
+            and self._live_session_token
+            and secrets.compare_digest(token, self._live_session_token)
+        )
+
+    def clear_live_session(self) -> None:
+        self._live_session_token = None
 
     # -- feed events -------------------------------------------------------------------
 

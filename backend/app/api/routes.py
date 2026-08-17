@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from ..backtest.data import fetch_ibkr_history, generate_momentum_day
@@ -18,6 +18,12 @@ from ..storage import get_storage
 from ..strategies import STRATEGY_REGISTRY
 
 router = APIRouter(prefix="/api")
+LIVE_CONFIRMATION = "ENABLE LIVE TRADING"
+
+
+def require_live_session(eng, token: Optional[str]) -> None:
+    if eng.mode == Mode.LIVE and not eng.verify_live_session(token):
+        raise HTTPException(403, "A valid live-trading session token is required.")
 
 
 # -- meta / state ------------------------------------------------------------
@@ -28,6 +34,8 @@ def state():
     return {
         "mode": eng.mode.value,
         "read_only": eng.read_only,
+        "live_orders_enabled": eng.live_orders_enabled,
+        "live_trading_available": settings.ibkr.live_trading_enabled,
         "ibkr_port": getattr(eng.broker, "connected_port", None),
         "market_condition": settings.market_condition,
         "starting_equity": settings.starting_equity,
@@ -64,8 +72,12 @@ class SettingsUpdate(BaseModel):
 
 
 @router.post("/settings")
-def update_settings(update: SettingsUpdate):
+def update_settings(
+    update: SettingsUpdate,
+    x_stocktrade_live_token: Optional[str] = Header(None),
+):
     eng = get_engine()
+    require_live_session(eng, x_stocktrade_live_token)
     if update.share_size is not None:
         eng.share_size = max(1, update.share_size)
     if update.auto_trade is not None:
@@ -116,8 +128,12 @@ class PlaceOrder(BaseModel):
 
 
 @router.post("/orders")
-async def place_order(po: PlaceOrder):
+async def place_order(
+    po: PlaceOrder,
+    x_stocktrade_live_token: Optional[str] = Header(None),
+):
     eng = get_engine()
+    require_live_session(eng, x_stocktrade_live_token)
     qty = po.qty if po.qty is not None else eng.share_size
     req = OrderRequest(
         symbol=po.symbol.upper(),
@@ -135,15 +151,21 @@ class FlattenBody(BaseModel):
 
 
 @router.post("/flatten")
-async def flatten(body: FlattenBody):
+async def flatten(
+    body: FlattenBody,
+    x_stocktrade_live_token: Optional[str] = Header(None),
+):
     eng = get_engine()
+    require_live_session(eng, x_stocktrade_live_token)
     orders = await eng.broker.flatten(body.symbol.upper() if body.symbol else None)
     return {"flattened": [o.model_dump() for o in orders]}
 
 
 @router.post("/cancel_all")
-async def cancel_all():
-    n = await get_engine().broker.cancel_all()
+async def cancel_all(x_stocktrade_live_token: Optional[str] = Header(None)):
+    eng = get_engine()
+    require_live_session(eng, x_stocktrade_live_token)
+    n = await eng.broker.cancel_all()
     return {"cancelled": n}
 
 
@@ -171,25 +193,45 @@ def daily_history():
 
 
 @router.post("/risk/rearm")
-def rearm():
-    get_engine().risk.rearm()
-    return get_engine().risk.snapshot()
+def rearm(x_stocktrade_live_token: Optional[str] = Header(None)):
+    eng = get_engine()
+    require_live_session(eng, x_stocktrade_live_token)
+    eng.risk.rearm()
+    return eng.risk.snapshot()
 
 
 # -- mode switching -----------------------------------------------------------------
 
 class ModeRequest(BaseModel):
-    mode: str                      # "sim" | "paper"
-    port: Optional[int] = None     # explicit IBKR port; live ports → read-only
+    mode: str                      # "sim" | "paper" | "live"
+    port: Optional[int] = None
+    live_unlock_code: Optional[str] = None
+    live_confirmation: Optional[str] = None
 
 
 @router.post("/mode")
 async def switch_mode(body: ModeRequest):
-    if body.mode not in (Mode.SIM.value, Mode.PAPER.value):
+    if body.mode not in (Mode.SIM.value, Mode.PAPER.value, Mode.LIVE.value):
         raise HTTPException(400, f"Cannot switch to '{body.mode}' at runtime")
     eng = get_engine()
     try:
-        await eng.switch_mode(Mode(body.mode), port=body.port)
+        target = Mode(body.mode)
+        if target == Mode.LIVE:
+            if body.live_confirmation != LIVE_CONFIRMATION:
+                raise HTTPException(400, f"Type '{LIVE_CONFIRMATION}' to continue.")
+            if not eng.live_unlock_matches(body.live_unlock_code or ""):
+                raise HTTPException(403, "Invalid live-trading unlock code.")
+            await eng.switch_mode(target, port=body.port, live_orders=True)
+            live_session_token = eng.start_live_session()
+        else:
+            await eng.switch_mode(target, port=body.port)
+            live_session_token = None
+    except HTTPException:
+        raise
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except ConnectionError as e:
         raise HTTPException(502, str(e))
     except Exception as e:
@@ -197,6 +239,8 @@ async def switch_mode(body: ModeRequest):
     return {
         "mode": eng.mode.value,
         "read_only": eng.read_only,
+        "live_orders_enabled": eng.live_orders_enabled,
+        "live_session_token": live_session_token,
         "port": getattr(eng.broker, "connected_port", None),
         "selected": eng.selected_symbol,
     }

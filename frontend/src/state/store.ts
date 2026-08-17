@@ -22,6 +22,8 @@ interface AppState {
   connected: boolean
   mode: string
   readOnly: boolean
+  liveOrdersEnabled: boolean
+  liveTradingAvailable: boolean
   marketCondition: string
   account: Account | null
   risk: RiskState | null
@@ -56,7 +58,7 @@ interface AppState {
   setStrategy: (name: string, params?: Record<string, unknown>) => Promise<void>
   setStrategyParams: (params: Record<string, unknown>) => Promise<void>
   setMarketCondition: (c: string) => Promise<void>
-  switchMode: (mode: string) => Promise<void>
+  switchMode: (mode: string, liveUnlockCode?: string, liveConfirmation?: string) => Promise<boolean>
   modeSwitching: boolean
   buyMarket: () => Promise<void>
   sellHalf: () => Promise<void>
@@ -84,6 +86,8 @@ export const useStore = create<AppState>((set, get) => ({
   connected: false,
   mode: 'sim',
   readOnly: false,
+  liveOrdersEnabled: false,
+  liveTradingAvailable: false,
   marketCondition: 'hot',
   account: null,
   risk: null,
@@ -114,6 +118,8 @@ export const useStore = create<AppState>((set, get) => ({
       set({
         mode: s.mode,
         readOnly: Boolean(s.read_only),
+        liveOrdersEnabled: Boolean(s.live_orders_enabled),
+        liveTradingAvailable: Boolean(s.live_trading_available),
         marketCondition: s.market_condition,
         shareSize: s.share_size,
         autoTrade: s.auto_trade,
@@ -182,14 +188,18 @@ export const useStore = create<AppState>((set, get) => ({
           break
         case 'mode': {
           const readOnly = Boolean(data.read_only)
-          if (data.mode !== st.mode || readOnly !== st.readOnly) {
+          const liveOrdersEnabled = Boolean(data.live_orders_enabled)
+          if (data.mode !== st.mode || readOnly !== st.readOnly || liveOrdersEnabled !== st.liveOrdersEnabled) {
             set({
-              mode: data.mode, readOnly,
+              mode: data.mode, readOnly, liveOrdersEnabled,
+              autoTrade: Boolean(data.auto_trade),
               scanner: [], signals: [], fills: [], positions: [],
             })
             st.toast(
-              readOnly ? 'warn' : 'info',
-              readOnly
+              liveOrdersEnabled ? 'warn' : readOnly ? 'warn' : 'info',
+              liveOrdersEnabled
+                ? `LIVE ORDERS ENABLED on port ${data.port}`
+                : readOnly
                 ? `Mode: ${String(data.mode).toUpperCase()} — LIVE account on port ${data.port}: READ-ONLY, orders disabled`
                 : `Mode: ${String(data.mode).toUpperCase()}`,
             )
@@ -247,16 +257,18 @@ export const useStore = create<AppState>((set, get) => ({
     get().toast('success', 'Strategy parameters applied')
   },
 
-  switchMode: async (mode) => {
+  switchMode: async (mode, liveUnlockCode, liveConfirmation) => {
     set({ modeSwitching: true })
     try {
-      await api.setMode(mode)
+      await api.setMode(mode, liveUnlockCode, liveConfirmation)
       // 'mode' + 'selected' WS events finish the transition
+      return true
     } catch (e) {
       const msg = String(e).replace(/^Error:\s*\/mode:\s*\d+\s*/, '')
       let detail = msg
       try { detail = JSON.parse(msg).detail ?? msg } catch { /* raw text */ }
       get().toast('error', detail)
+      return false
     } finally {
       set({ modeSwitching: false })
     }

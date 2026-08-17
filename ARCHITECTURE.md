@@ -39,7 +39,7 @@ and live execution through Interactive Brokers.
 2. **Same strategy code runs live and in backtest.** Strategies consume `Bar` events
    and emit `Signal`s. The backtest engine and the live engine feed them identically.
 3. **Paper-first.** The `PaperBroker` simulates fills so the entire app works with no
-   IBKR account connected. Flipping to live is a config change.
+   IBKR account connected. Live mode requires server opt-in and runtime confirmation.
 4. **Risk is enforced centrally**, not per-strategy. The `RiskManager` sits between
    signals and the broker and can veto or resize any order.
 
@@ -221,8 +221,8 @@ accidental.
 - `SIM` (default): synthetic momentum tape, PaperBroker. No dependencies, demo-ready.
 - `PAPER`: real IBKR market data + IBKR paper account (TWS port 7497). Switchable
   from the UI at runtime; the feed+broker pair swaps, everything else is identical.
-- `LIVE`: real money (port 7496). Deliberately has **no runtime path** — requires
-  editing config.py.
+- `LIVE`: real money (TWS 7496 / Gateway 4001). Requires server opt-in, the
+  per-startup unlock code, and explicit UI confirmation.
 
 ## Data feeds
 

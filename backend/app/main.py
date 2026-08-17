@@ -44,6 +44,8 @@ async def websocket_endpoint(ws: WebSocket):
         "mode": eng.mode.value,
         "read_only": eng.read_only,
         "port": getattr(eng.broker, "connected_port", None),
+        "live_orders_enabled": eng.live_orders_enabled,
+        "auto_trade": eng.auto_trade,
     }}, default=str))
     await ws.send_text(json.dumps({"type": "scanner", "data": eng.scanner_results()}, default=str))
     acct = eng.broker.account()

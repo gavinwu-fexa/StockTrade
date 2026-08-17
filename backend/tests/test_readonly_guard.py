@@ -1,6 +1,4 @@
-"""The read-only safeguard: a broker connected to a live IBKR port must
-refuse every order path, and the engine must refuse before even reaching
-the broker."""
+"""The default live-port safeguard refuses orders unless explicitly unlocked."""
 import pytest
 
 from app.brokers.ibkr import IBKRBroker

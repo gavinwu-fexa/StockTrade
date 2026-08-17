@@ -84,17 +84,14 @@ Stock pickers work the same way (`scanners/base.py` → `@register_picker`).
 Ports are probed automatically: TWS paper 7497, Gateway paper 4002. You can
 pass an explicit port via `POST /api/mode {"mode":"paper","port":N}`.
 
-**Live-account safeguard:** connecting to a live port (TWS 7496 / Gateway
-4001) is allowed for *market data only* — the header shows
-"🔒 DATA ONLY — LIVE ACCT" and every order path (buy, sell, flatten,
-cancel) is refused at both the engine and broker layers. There is no
-override; to trade, connect to a paper port.
+**Live-account safeguard:** live trading (TWS 7496 / Gateway 4001) requires the
+server opt-in, a per-startup unlock code from the backend log, and an explicit
+confirmation in the UI. The browser receives a memory-only token that is
+required for live order and settings mutations.
 
 Notes: without paid market-data subscriptions IBKR serves delayed quotes;
 without fundamentals, float shows "unknown" (soft pass) and catalyst
-detection is off, so the best scanner grade is B. `LIVE` trading
-deliberately has no runtime path — it requires editing
-`backend/app/config.py`.
+detection is off, so the best scanner grade is B.
 
 ## Persistence & backtests on real data
 

@@ -38,9 +38,27 @@ def test_round_trips_ignores_sell_without_position():
 
 
 @pytest.mark.asyncio
-async def test_live_mode_switch_is_refused():
+async def test_live_mode_switch_requires_server_opt_in(monkeypatch):
+    from app.config import settings
     from app.engine import Engine
 
+    monkeypatch.setattr(settings.ibkr, "live_trading_enabled", False)
     eng = Engine()
-    with pytest.raises(ValueError):
+    with pytest.raises(PermissionError):
         await eng.switch_mode(Mode.LIVE)
+
+
+def test_live_unlock_creates_memory_only_session(monkeypatch):
+    from app.config import settings
+    from app.engine import Engine
+
+    monkeypatch.setattr(settings.ibkr, "live_trading_enabled", True)
+    eng = Engine()
+    assert eng.live_unlock_matches("wrong") is False
+    assert eng.live_unlock_matches(eng._live_unlock_code) is True
+
+    token = eng.start_live_session()
+    assert eng.verify_live_session(token) is True
+    assert eng.verify_live_session("wrong") is False
+    eng.clear_live_session()
+    assert eng.verify_live_session(token) is False

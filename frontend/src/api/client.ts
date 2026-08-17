@@ -1,11 +1,14 @@
 import type { BacktestResult } from '../types'
 
 const BASE = '/api'
+let liveSessionToken: string | null = null
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (liveSessionToken) headers['x-stocktrade-live-token'] = liveSessionToken
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!res.ok) throw new Error(`${path}: ${res.status} ${await res.text()}`)
@@ -43,7 +46,19 @@ export const api = {
     days?: number
     seed?: number
   }) => post<BacktestResult>('/backtest', req),
-  setMode: (mode: string) => post<{ mode: string }>('/mode', { mode }),
+  setMode: async (mode: string, liveUnlockCode?: string, liveConfirmation?: string) => {
+    const result = await post<{
+      mode: string
+      live_orders_enabled: boolean
+      live_session_token?: string | null
+    }>('/mode', {
+      mode,
+      live_unlock_code: liveUnlockCode,
+      live_confirmation: liveConfirmation,
+    })
+    liveSessionToken = result.live_session_token ?? null
+    return result
+  },
   dailyHistory: () => get<any[]>('/history/daily'),
   tradeHistory: (day?: string) => get<any[]>(`/trades${day ? `?day=${day}` : ''}`),
 }

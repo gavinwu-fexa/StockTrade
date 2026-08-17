@@ -7,7 +7,15 @@ halt after 3 consecutive losers, trading window 7:00-11:00 ET.
 from __future__ import annotations
 
 from enum import Enum
+import os
 from pydantic import BaseModel
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 class Mode(str, Enum):
@@ -27,13 +35,22 @@ class RiskConfig(BaseModel):
 
 
 class IBKRConfig(BaseModel):
-    host: str = "127.0.0.1"
-    # probed in order when no explicit port is given: TWS paper, Gateway paper
-    paper_ports: list[int] = [7497, 4002]
-    # TWS live, Gateway live — connections to these are FORCED read-only;
-    # there is no runtime path that places orders on a live account.
-    live_ports: list[int] = [7496, 4001]
-    client_id: int = 7
+    host: str = os.getenv("STOCKTRADE_IBKR_HOST", "127.0.0.1")
+    # Probe Gateway first, then TWS.
+    paper_ports: list[int] = [
+        int(port.strip())
+        for port in os.getenv("STOCKTRADE_IBKR_PAPER_PORTS", "4002,7497").split(",")
+        if port.strip()
+    ]
+    # TWS live, Gateway live. Orders require the separate live-trading opt-in
+    # and runtime unlock; otherwise these ports remain read-only.
+    live_ports: list[int] = [
+        int(port.strip())
+        for port in os.getenv("STOCKTRADE_IBKR_LIVE_PORTS", "4001,7496").split(",")
+        if port.strip()
+    ]
+    client_id: int = int(os.getenv("STOCKTRADE_IBKR_CLIENT_ID", "7"))
+    live_trading_enabled: bool = _env_flag("STOCKTRADE_ENABLE_LIVE_TRADING")
 
 
 class Settings(BaseModel):
